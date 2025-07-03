@@ -127,7 +127,15 @@ font-family: Arial, sans-serif;
         box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     }
 
-
+    .error-message {
+        text-align: center;
+        padding: 20px;
+        color: #d32f2f;
+        background-color: #ffebee;
+        border: 1px solid #ffcdd2;
+        margin: 10px;
+        border-radius: 4px;
+    }
 </style>
 <script type="text/javascript">
     var currentDocument = null;
@@ -142,6 +150,10 @@ font-family: Arial, sans-serif;
     var renderedPages = new Set();
     var isScrollMode = false;
 
+    // Enhanced file type detection
+    var IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'tiff', 'tif'];
+    var PDF_EXTENSIONS = ['pdf'];
+
     function addMessage(message) {
         var notification_message = {
             type: 2,
@@ -150,16 +162,27 @@ font-family: Arial, sans-serif;
             showCloseButton: true
         };
 
-        Xrm.App.addGlobalNotification(notification_message).then(
-            function success(result) { },
-            function (error) {
-                console.log(error.message);
-            }
-        );
+        if (typeof Xrm !== 'undefined' && Xrm.App && Xrm.App.addGlobalNotification) {
+            Xrm.App.addGlobalNotification(notification_message).then(
+                function success(result) { },
+                function (error) {
+                    console.log(error.message);
+                }
+            );
+        } else {
+            // Fallback for environments without Xrm
+            console.warn(message);
+            showErrorInCanvas(message);
+        }
+    }
+
+    function showErrorInCanvas(message) {
+        var canvasdiv = document.getElementById('canvas');
+        canvasdiv.innerHTML = '<div class="error-message">' + message + '</div>';
     }
 
     function showControls() {
-        document.getElementById('controls').style.display = 'block';
+        document.getElementById('controls').style.display = 'flex';
     }
 
     function hideControls() {
@@ -192,35 +215,67 @@ font-family: Arial, sans-serif;
                 nextBtn.disabled = currentPage >= totalPages;
             }
         } else {
-            pageInfo.textContent = '';
+            pageInfo.textContent = currentFileType === 'image' ? 'Image' : '';
             viewModeToggle.style.display = 'none';
-            prevBtn.disabled = true;
-            nextBtn.disabled = true;
+            prevBtn.style.display = 'none';
+            nextBtn.style.display = 'none';
         }
+    }
+
+    function detectFileType(fileName, url) {
+        // First try to detect from filename extension
+        if (fileName && fileName.includes('.')) {
+            var extension = fileName.split('.').pop().toLowerCase();
+            if (IMAGE_EXTENSIONS.includes(extension)) {
+                return 'image';
+            } else if (PDF_EXTENSIONS.includes(extension)) {
+                return 'pdf';
+            }
+        }
+
+        // If no clear extension, try to detect from URL or content-type
+        // Default to attempting image first, then PDF
+        return 'image';
     }
 
     function displayImg(url, fileName) {
         var canvasdiv = document.getElementById('canvas');
-        canvasdiv.innerHTML = '';
+        canvasdiv.innerHTML = '<div class="loading">Loading image...</div>';
 
         var img = document.createElement("img");
-        img.src = url;
+        
+        // Set up error handling before setting src
+        img.onerror = function() {
+            console.log('Image load failed, attempting PDF load...');
+            // If image fails to load, try as PDF
+            displayPDF(url, fileName);
+        };
+
+        img.onload = function() {
+            canvasdiv.innerHTML = '';
+            canvasdiv.appendChild(img);
+            currentFileType = 'image';
+            totalPages = 1;
+            currentPage = 1;
+            showControls();
+            updatePageInfo();
+        };
+
+        // Apply current transformations
         img.style.height = "auto";
         img.style.width = (100 * currentScale).toFixed(0) + "%";
         img.style.transform = `rotate(${currentRotation}deg)`;
         img.alt = "Document Image";
-        img.onload = function() {
-            showControls();
-            updatePageInfo();
-        };
-        img.onerror = function() {
-            addMessage('Error loading image: ' + fileName);
-        };
-        canvasdiv.appendChild(img);
-
-        currentFileType = 'image';
-        totalPages = 1;
-        currentPage = 1;
+        
+        // Add cache-busting and proper headers
+        var imageUrl = url;
+        if (url.indexOf('?') === -1) {
+            imageUrl += '?cache=' + Date.now();
+        } else {
+            imageUrl += '&cache=' + Date.now();
+        }
+        
+        img.src = imageUrl;
     }
 
     function renderPDFPage(pageNum) {
@@ -355,7 +410,20 @@ font-family: Arial, sans-serif;
         var PDFJS = window['pdfjs-dist/build/pdf'];
         PDFJS.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.worker.min.js';
 
-        var loadingTask = PDFJS.getDocument(url);
+        // Add cache-busting for PDFs too
+        var pdfUrl = url;
+        if (url.indexOf('?') === -1) {
+            pdfUrl += '?cache=' + Date.now();
+        } else {
+            pdfUrl += '&cache=' + Date.now();
+        }
+
+        var loadingTask = PDFJS.getDocument({
+            url: pdfUrl,
+            cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/cmaps/',
+            cMapPacked: true
+        });
+
         loadingTask.promise.then(function(pdf) {
             pdfDoc = pdf;
             totalPages = pdf.numPages;
@@ -373,9 +441,15 @@ font-family: Arial, sans-serif;
 
             showControls();
         }, function(reason) {
-            console.error(reason);
-            addMessage("Error loading PDF: " + reason.message);
-            canvasdiv.innerHTML = '<div class="loading">Error loading PDF</div>';
+            console.error('PDF load failed:', reason);
+            // If PDF fails and we haven't tried image yet, try image
+            if (currentFileType !== 'image') {
+                console.log('PDF failed, trying as image...');
+                displayImg(url, fileName);
+            } else {
+                addMessage("Error loading document: " + reason.message);
+                canvasdiv.innerHTML = '<div class="error-message">Error loading document: ' + reason.message + '</div>';
+            }
         });
     }
 
@@ -431,6 +505,11 @@ font-family: Arial, sans-serif;
         }
     }
 
+    function getFileExtension(filename) {
+        if (!filename || !filename.includes('.')) return '';
+        return filename.split('.').pop().toLowerCase();
+    }
+
     function downloadFile() {
         if (!currentFileUrl) {
             addMessage("No file to download");
@@ -440,34 +519,21 @@ font-family: Arial, sans-serif;
         try {
             // Ensure the filename has the correct extension
             var downloadFileName = currentFileName || 'document';
-            var fileExtension = '';
+            var fileExtension = getFileExtension(downloadFileName);
             
-            // Determine file extension based on current file type
-            if (currentFileType === 'pdf') {
-                fileExtension = '.pdf';
-            } else if (currentFileType === 'image') {
-                // Try to get extension from filename, default to common image formats
-                if (downloadFileName.toLowerCase().includes('.jpg') || downloadFileName.toLowerCase().includes('.jpeg')) {
-                    fileExtension = '.jpg';
-                } else if (downloadFileName.toLowerCase().includes('.png')) {
-                    fileExtension = '.png';
-                } else if (downloadFileName.toLowerCase().includes('.gif')) {
-                    fileExtension = '.gif';
-                } else {
-                    fileExtension = '.jpg'; // default for images
+            // If no extension detected, add one based on file type
+            if (!fileExtension) {
+                if (currentFileType === 'pdf') {
+                    downloadFileName += '.pdf';
+                } else if (currentFileType === 'image') {
+                    downloadFileName += '.jpg'; // default for images
                 }
-            }
-            
-            // Add extension if it's not already there
-            if (fileExtension && !downloadFileName.toLowerCase().endsWith(fileExtension.toLowerCase())) {
-                downloadFileName += fileExtension;
             }
 
             // Create a new XMLHttpRequest to fetch the file with proper headers
             var request = new XMLHttpRequest();
             request.open('GET', currentFileUrl, true);
             request.responseType = 'blob';
-            request.setRequestHeader('Accept', 'application/octet-stream');
             
             request.onload = function() {
                 if (request.status === 200) {
@@ -508,6 +574,18 @@ font-family: Arial, sans-serif;
         }
     }
 
+    function attemptFileLoad(url, fileName, preferredType) {
+        currentFileUrl = url;
+        currentFileName = fileName || "document";
+        
+        // Try the preferred type first
+        if (preferredType === 'pdf') {
+            displayPDF(url, fileName);
+        } else {
+            displayImg(url, fileName);
+        }
+    }
+
     function displayFile() {
         try {
             var recordId = getRecordId();
@@ -517,7 +595,7 @@ font-family: Arial, sans-serif;
                 return;
             }
 
-            var apiUrl = window.location.origin + "/api/data/v9.0/{table_set_name}(" + recordId + ")?$select={table_name},{table_fielddata}";
+            var apiUrl = window.location.origin + "/api/data/v9.0/{table_set_name}(" + recordId + ")?$select={table_name},{table_filedata}";
 
             var request = new XMLHttpRequest();
             request.onreadystatechange = function() {
@@ -531,19 +609,13 @@ font-family: Arial, sans-serif;
                         }
 
                         currentFileName = entity.{table_name} || "document";
-                        var fileType = "pdf";
-
-                        if (currentFileName && currentFileName.includes('.')) {
-                            fileType = currentFileName.split('.').pop().toLowerCase();
-                        }
-
+                        var detectedType = detectFileType(currentFileName);
+                        
                         currentFileUrl = window.location.origin + "/api/data/v9.0/{table_set_name}(" + recordId + ")/{table_filedata}/$value";
 
-                        if (fileType === "pdf") {
-                            displayPDF(currentFileUrl, currentFileName);
-                        } else {
-                            displayImg(currentFileUrl, currentFileName);
-                        }
+                        // Attempt to load with detected file type
+                        attemptFileLoad(currentFileUrl, currentFileName, detectedType);
+
                     } else {
                         addMessage("Error loading document: " + request.status);
                     }
@@ -569,7 +641,7 @@ font-family: Arial, sans-serif;
         }
 
         try {
-            if (parent && parent.Xrm && parent.Xrm.Page) {
+            if (typeof parent !== 'undefined' && parent.Xrm && parent.Xrm.Page) {
                 var formRecordId = parent.Xrm.Page.data.entity.getId();
                 return formRecordId.replace(/[{}]/g, "");
             }
@@ -578,7 +650,7 @@ font-family: Arial, sans-serif;
         }
 
         try {
-            if (parent && parent.Xrm && parent.Xrm.Utility && parent.Xrm.Utility.getGlobalContext) {
+            if (typeof parent !== 'undefined' && parent.Xrm && parent.Xrm.Utility && parent.Xrm.Utility.getGlobalContext) {
                 var globalContext = parent.Xrm.Utility.getGlobalContext();
                 if (globalContext.getCurrentAppUrl) {
                     var currentUrl = window.location.href;
