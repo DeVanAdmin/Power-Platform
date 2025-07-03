@@ -67,16 +67,14 @@ Search and replace ALL instances of these placeholders:
 
 ### 5. Add to Entity Form
 
-1. Edit your entity form
-2. Add an **IFRAME** control
-3. Set the **URL** to your web resource:
-   ```
-   $webresource:your_webresource_name
-   ```
-4. Configure iframe properties:
-   - **Height**: 600px (or desired height)
-   - **Enable cross-frame scripting**: Yes
-   - **Pass record object-type code and unique identifier as parameters**: Yes
+1. Edit your entity form in the form designer
+2. From the **Components** panel, drag and drop a **Web resource** control onto the form
+3. Configure the web resource properties:
+   - **Web resource**: Select your uploaded HTML web resource
+   - **Name**: Give it a descriptive name (e.g., "DocumentViewer")
+   - **Label**: Set the label or hide it as needed
+4. Set the size and positioning as desired
+5. **Save** and **Publish** the form
 
 ## API Field Name Reference
 
