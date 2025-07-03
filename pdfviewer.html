@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Document Viewer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.min.js"></script>
+<style>
+body {
+margin: 0;
+padding: 0;
+font-family: Arial, sans-serif;
+}
+    #controls {
+        background-color: #f4f4f4;
+        padding: 10px;
+        border-bottom: 1px solid #ddd;
+        display: block;
+        white-space: normal;
+        overflow: visible;
+        flex-wrap: wrap;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 44px;
+    }
+
+    #controls button {
+        margin-right: 0;
+        padding: 6px 10px;
+        background-color: #0078d4;
+        color: white;
+        border: none;
+        border-radius: 3px;
+        cursor: pointer;
+        font-size: 11px;
+        display: inline-block;
+        vertical-align: middle;
+        flex-shrink: 0;
+        white-space: nowrap;
+    }
+
+    #controls button:hover {
+        background-color: #106ebe;
+    }
+
+    #controls button:disabled {
+        background-color: #ccc;
+        cursor: not-allowed;
+    }
+
+    #pageInfo {
+        font-size: 11px;
+        color: #666;
+        margin-left: 0;
+        display: inline-block;
+        vertical-align: middle;
+        flex-shrink: 0;
+        white-space: nowrap;
+    }
+
+    #viewModeToggle {
+        background-color: #28a745;
+    }
+
+    #viewModeToggle:hover {
+        background-color: #218838;
+    }
+
+    #canvas {
+        border: 1px solid black;
+        width: 100%;
+        height: auto;
+        min-height: 200px;
+        background-color: #f9f9f9;
+        overflow: auto;
+        position: relative;
+    }
+
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+        #controls {
+            padding: 8px;
+            gap: 6px;
+        }
+        
+        #controls button {
+            padding: 8px 12px;
+            font-size: 12px;
+        }
+        
+        #pageInfo {
+            font-size: 12px;
+        }
+    }
+
+    @media (max-width: 480px) {
+        #controls {
+            padding: 6px;
+            gap: 4px;
+        }
+        
+        #controls button {
+            padding: 6px 8px;
+            font-size: 10px;
+        }
+        
+        #pageInfo {
+            font-size: 10px;
+        }
+    }
+
+    #canvas img, #canvas canvas {
+        display: block;
+        margin: 10px auto;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .loading {
+        text-align: center;
+        padding: 20px;
+        color: #666;
+    }
+
+    .pdf-page {
+        margin: 10px auto;
+        display: block;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+
+</style>
+<script type="text/javascript">
+    var currentDocument = null;
+    var currentScale = 1.5;
+    var currentRotation = 0;
+    var currentFileUrl = '';
+    var currentFileName = '';
+    var currentFileType = '';
+    var pdfDoc = null;  
+    var currentPage = 1;
+    var totalPages = 0;
+    var renderedPages = new Set();
+    var isScrollMode = false;
+
+    function addMessage(message) {
+        var notification_message = {
+            type: 2,
+            level: 3, //warning
+            message: message,
+            showCloseButton: true
+        };
+
+        Xrm.App.addGlobalNotification(notification_message).then(
+            function success(result) { },
+            function (error) {
+                console.log(error.message);
+            }
+        );
+    }
+
+    function showControls() {
+        document.getElementById('controls').style.display = 'block';
+    }
+
+    function hideControls() {
+        document.getElementById('controls').style.display = 'none';
+    }
+
+    function updatePageInfo() {
+        var pageInfo = document.getElementById('pageInfo');
+        var viewModeToggle = document.getElementById('viewModeToggle');
+        var prevBtn = document.getElementById('prevPage');
+        var nextBtn = document.getElementById('nextPage');
+
+        if (currentFileType === 'pdf' && totalPages > 0) {
+            if (totalPages > 1) {
+                viewModeToggle.style.display = 'inline-block';
+                viewModeToggle.textContent = isScrollMode ? 'Single Page View' : 'Scroll View';
+            } else {
+                viewModeToggle.style.display = 'none';
+            }
+
+            if (isScrollMode) {
+                pageInfo.textContent = `${totalPages} pages (scroll view)`;
+                prevBtn.style.display = 'none';
+                nextBtn.style.display = 'none';
+            } else {
+                pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+                prevBtn.style.display = 'inline-block';
+                nextBtn.style.display = 'inline-block';
+                prevBtn.disabled = currentPage <= 1;
+                nextBtn.disabled = currentPage >= totalPages;
+            }
+        } else {
+            pageInfo.textContent = '';
+            viewModeToggle.style.display = 'none';
+            prevBtn.disabled = true;
+            nextBtn.disabled = true;
+        }
+    }
+
+    function displayImg(url, fileName) {
+        var canvasdiv = document.getElementById('canvas');
+        canvasdiv.innerHTML = '';
+
+        var img = document.createElement("img");
+        img.src = url;
+        img.style.height = "auto";
+        img.style.width = (100 * currentScale).toFixed(0) + "%";
+        img.style.transform = `rotate(${currentRotation}deg)`;
+        img.alt = "Document Image";
+        img.onload = function() {
+            showControls();
+            updatePageInfo();
+        };
+        img.onerror = function() {
+            addMessage('Error loading image: ' + fileName);
+        };
+        canvasdiv.appendChild(img);
+
+        currentFileType = 'image';
+        totalPages = 1;
+        currentPage = 1;
+    }
+
+    function renderPDFPage(pageNum) {
+        if (!pdfDoc || pageNum < 1 || pageNum > totalPages) return;
+
+        return pdfDoc.getPage(pageNum).then(function(page) {
+            // Get device pixel ratio for high-DPI displays
+            var devicePixelRatio = window.devicePixelRatio || 1;
+            
+            // Use higher scale for better quality, accounting for device pixel ratio
+            var renderScale = currentScale * devicePixelRatio * 1.5; // Increased base quality
+            
+            var viewport = page.getViewport({
+                scale: renderScale,
+                rotation: currentRotation
+            });
+
+            var canvas = document.createElement('canvas');
+            canvas.className = 'pdf-page';
+            canvas.id = 'page-' + pageNum;
+            var context = canvas.getContext('2d');
+            
+            // Set actual canvas size (high resolution)
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+            
+            // Scale down the display size while keeping high resolution
+            canvas.style.height = (viewport.height / devicePixelRatio / 1.5) + 'px';
+            canvas.style.width = (viewport.width / devicePixelRatio / 1.5) + 'px';
+
+            var renderContext = {
+                canvasContext: context,
+                viewport: viewport
+            };
+
+            return page.render(renderContext).promise.then(function() {
+                return canvas;
+            });
+        });
+    }
+
+    function renderSinglePage(pageNum) {
+        var canvasdiv = document.getElementById('canvas');
+        canvasdiv.innerHTML = '<div class="loading">Rendering page...</div>';
+
+        renderPDFPage(pageNum).then(function(canvas) {
+            canvasdiv.innerHTML = '';
+            canvasdiv.appendChild(canvas);
+            updatePageInfo();
+        }).catch(function(error) {
+            addMessage('Error rendering page: ' + error.message);
+        });
+    }
+
+    function renderAllPages() {
+        var canvasdiv = document.getElementById('canvas');
+        canvasdiv.innerHTML = '<div class="loading">Loading all pages...</div>';
+
+        var promises = [];
+        for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+            promises.push(renderPDFPage(pageNum));
+        }
+
+        Promise.all(promises).then(function(canvases) {
+            canvasdiv.innerHTML = '';
+            canvases.forEach(function(canvas) {
+                canvasdiv.appendChild(canvas);
+            });
+            updatePageInfo();
+            setupInfiniteScroll();
+        }).catch(function(error) {
+            addMessage('Error rendering pages: ' + error.message);
+        });
+    }
+
+    function setupInfiniteScroll() {
+        var canvasdiv = document.getElementById('canvas');
+
+        // Remove any existing scroll listener
+        canvasdiv.removeEventListener('scroll', handleScroll);
+
+        if (isScrollMode && totalPages > 1) {
+            canvasdiv.addEventListener('scroll', handleScroll);
+        }
+    }
+
+    function handleScroll() {
+        if (!isScrollMode) return;
+
+        var canvasdiv = document.getElementById('canvas');
+        var pages = canvasdiv.querySelectorAll('.pdf-page');
+        var scrollTop = canvasdiv.scrollTop;
+        var containerHeight = canvasdiv.clientHeight;
+
+        // Find which page is most visible
+        var mostVisiblePage = 1;
+        var maxVisibleArea = 0;
+
+        pages.forEach(function(page, index) {
+            var pageTop = page.offsetTop;
+            var pageBottom = pageTop + page.offsetHeight;
+            var pageNum = index + 1;
+
+            // Calculate visible area of this page
+            var visibleTop = Math.max(scrollTop, pageTop);
+            var visibleBottom = Math.min(scrollTop + containerHeight, pageBottom);
+            var visibleArea = Math.max(0, visibleBottom - visibleTop);
+
+            if (visibleArea > maxVisibleArea) {
+                maxVisibleArea = visibleArea;
+                mostVisiblePage = pageNum;
+            }
+        });
+
+        currentPage = mostVisiblePage;
+    }
+
+    function toggleViewMode() {
+        isScrollMode = !isScrollMode;
+
+        if (isScrollMode && totalPages > 1) {
+            renderAllPages();
+        } else {
+            renderSinglePage(currentPage);
+        }
+    }
+
+    function displayPDF(url, fileName) {
+        var canvasdiv = document.getElementById('canvas');
+        canvasdiv.innerHTML = '<div class="loading">Loading PDF...</div>';
+
+        var PDFJS = window['pdfjs-dist/build/pdf'];
+        PDFJS.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.worker.min.js';
+
+        var loadingTask = PDFJS.getDocument(url);
+        loadingTask.promise.then(function(pdf) {
+            pdfDoc = pdf;
+            totalPages = pdf.numPages;
+            currentPage = 1;
+            currentFileType = 'pdf';
+
+            // Auto-enable scroll mode for multi-page PDFs
+            if (totalPages > 1) {
+                isScrollMode = true;
+                renderAllPages();
+            } else {
+                isScrollMode = false;
+                renderSinglePage(currentPage);
+            }
+
+            showControls();
+        }, function(reason) {
+            console.error(reason);
+            addMessage("Error loading PDF: " + reason.message);
+            canvasdiv.innerHTML = '<div class="loading">Error loading PDF</div>';
+        });
+    }
+
+    function zoomIn() {
+        currentScale = Math.min(currentScale * 1.2, 5.0);
+        refreshDisplay();
+    }
+
+    function zoomOut() {
+        currentScale = Math.max(currentScale / 1.2, 0.1);
+        refreshDisplay();
+    }
+
+    function rotateLeft() {
+        currentRotation = (currentRotation - 90) % 360;
+        refreshDisplay();
+    }
+
+    function rotateRight() {
+        currentRotation = (currentRotation + 90) % 360;
+        refreshDisplay();
+    }
+
+    function resetView() {
+        currentScale = 1.5;
+        currentRotation = 0;
+        refreshDisplay();
+    }
+
+    function previousPage() {
+        if (currentPage > 1 && !isScrollMode) {
+            currentPage--;
+            renderSinglePage(currentPage);
+        }
+    }
+
+    function nextPage() {
+        if (currentPage < totalPages && !isScrollMode) {
+            currentPage++;
+            renderSinglePage(currentPage);
+        }
+    }
+
+    function refreshDisplay() {
+        if (currentFileType === 'pdf') {
+            if (isScrollMode && totalPages > 1) {
+                renderAllPages();
+            } else {
+                renderSinglePage(currentPage);
+            }
+        } else if (currentFileType === 'image') {
+            displayImg(currentFileUrl, currentFileName);
+        }
+    }
+
+    function downloadFile() {
+        if (!currentFileUrl) {
+            addMessage("No file to download");
+            return;
+        }
+
+        try {
+            // Ensure the filename has the correct extension
+            var downloadFileName = currentFileName || 'document';
+            var fileExtension = '';
+            
+            // Determine file extension based on current file type
+            if (currentFileType === 'pdf') {
+                fileExtension = '.pdf';
+            } else if (currentFileType === 'image') {
+                // Try to get extension from filename, default to common image formats
+                if (downloadFileName.toLowerCase().includes('.jpg') || downloadFileName.toLowerCase().includes('.jpeg')) {
+                    fileExtension = '.jpg';
+                } else if (downloadFileName.toLowerCase().includes('.png')) {
+                    fileExtension = '.png';
+                } else if (downloadFileName.toLowerCase().includes('.gif')) {
+                    fileExtension = '.gif';
+                } else {
+                    fileExtension = '.jpg'; // default for images
+                }
+            }
+            
+            // Add extension if it's not already there
+            if (fileExtension && !downloadFileName.toLowerCase().endsWith(fileExtension.toLowerCase())) {
+                downloadFileName += fileExtension;
+            }
+
+            // Create a new XMLHttpRequest to fetch the file with proper headers
+            var request = new XMLHttpRequest();
+            request.open('GET', currentFileUrl, true);
+            request.responseType = 'blob';
+            request.setRequestHeader('Accept', 'application/octet-stream');
+            
+            request.onload = function() {
+                if (request.status === 200) {
+                    // Create blob URL and trigger download
+                    var blob = request.response;
+                    var url = window.URL.createObjectURL(blob);
+                    
+                    var link = document.createElement('a');
+                    link.href = url;
+                    link.download = downloadFileName;
+                    link.style.display = 'none';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    
+                    // Clean up the blob URL
+                    window.URL.revokeObjectURL(url);
+                } else {
+                    addMessage("Error downloading file: " + request.status);
+                    // Fallback: open in new tab
+                    window.open(currentFileUrl, '_blank');
+                }
+            };
+            
+            request.onerror = function() {
+                addMessage("Error downloading file");
+                // Fallback: open in new tab
+                window.open(currentFileUrl, '_blank');
+            };
+            
+            request.send();
+            
+        } catch (error) {
+            console.error("Download error:", error);
+            addMessage("Error downloading file: " + error.message);
+            // Fallback: open in new tab
+            window.open(currentFileUrl, '_blank');
+        }
+    }
+
+    function displayFile() {
+        try {
+            var recordId = getRecordId();
+
+            if (!recordId) {
+                addMessage("Record ID not found");
+                return;
+            }
+
+            var apiUrl = window.location.origin + "/api/data/v9.0/dul_demotables(" + recordId + ")?$select=dul_name,dul_filedata";
+
+            var request = new XMLHttpRequest();
+            request.onreadystatechange = function() {
+                if (request.readyState == XMLHttpRequest.DONE) {
+                    if (request.status === 200) {
+                        var entity = JSON.parse(this.responseText);
+
+                        if (!entity.dul_filedata) {
+                            addMessage("No file found for this record");
+                            return;
+                        }
+
+                        currentFileName = entity.dul_name || "document";
+                        var fileType = "pdf";
+
+                        if (currentFileName && currentFileName.includes('.')) {
+                            fileType = currentFileName.split('.').pop().toLowerCase();
+                        }
+
+                        currentFileUrl = window.location.origin + "/api/data/v9.0/dul_demotables(" + recordId + ")/dul_filedata/$value";
+
+                        if (fileType === "pdf") {
+                            displayPDF(currentFileUrl, currentFileName);
+                        } else {
+                            displayImg(currentFileUrl, currentFileName);
+                        }
+                    } else {
+                        addMessage("Error loading document: " + request.status);
+                    }
+                }
+            };
+
+            request.open("GET", apiUrl);
+            request.setRequestHeader("Accept", "application/json");
+            request.send();
+
+        } catch (error) {
+            console.error("Error in displayFile:", error);
+            addMessage("Error loading document: " + error.message);
+        }
+    }
+
+    function getRecordId() {
+        var urlParams = new URLSearchParams(window.location.search);
+        var recordId = urlParams.get('recordId') || urlParams.get('id');
+
+        if (recordId) {
+            return recordId.replace(/[{}]/g, "");
+        }
+
+        try {
+            if (parent && parent.Xrm && parent.Xrm.Page) {
+                var formRecordId = parent.Xrm.Page.data.entity.getId();
+                return formRecordId.replace(/[{}]/g, "");
+            }
+        } catch (e) {
+            console.log("Could not access parent form context:", e);
+        }
+
+        try {
+            if (parent && parent.Xrm && parent.Xrm.Utility && parent.Xrm.Utility.getGlobalContext) {
+                var globalContext = parent.Xrm.Utility.getGlobalContext();
+                if (globalContext.getCurrentAppUrl) {
+                    var currentUrl = window.location.href;
+                    var idMatch = currentUrl.match(/id=([a-f0-9-]{36})/i);
+                    if (idMatch) {
+                        return idMatch[1];
+                    }
+                }
+            }
+        } catch (e) {
+            console.log("Could not access global context:", e);
+        }
+
+        return null;
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        displayFile();
+    });
+</script>
+</head>
+<body>
+<div id="controls">
+<button onclick="zoomOut()">Zoom Out</button>
+<button onclick="zoomIn()">Zoom In</button>
+<button onclick="resetView()">Reset View</button>
+<button onclick="rotateLeft()">↶ Rotate Left</button>
+<button onclick="rotateRight()">Rotate Right ↷</button>
+<button id="prevPage" onclick="previousPage()" disabled>← Previous</button>
+<button id="nextPage" onclick="nextPage()" disabled>Next →</button>
+<button id="viewModeToggle" onclick="toggleViewMode()" style="display: none;">Scroll View</button>
+<button onclick="downloadFile()">📥 Download</button>
+<span id="pageInfo"></span>
+</div>
+<div id="canvas" style="border: 1px solid black; width:100%; height: calc(100vh - 70px); background-color: #f9f9f9; overflow: auto;">
+    <div class="loading">
+        Loading document...
+    </div>
+</div>
+</body>
+</html>
