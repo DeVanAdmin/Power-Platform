@@ -517,7 +517,7 @@ font-family: Arial, sans-serif;
                 return;
             }
 
-            var apiUrl = window.location.origin + "/api/data/v9.0/dul_demotables(" + recordId + ")?$select=dul_name,dul_filedata";
+            var apiUrl = window.location.origin + "/api/data/v9.0/{table_set_name}(" + recordId + ")?$select={table_name},{table_fielddata}";
 
             var request = new XMLHttpRequest();
             request.onreadystatechange = function() {
@@ -525,19 +525,19 @@ font-family: Arial, sans-serif;
                     if (request.status === 200) {
                         var entity = JSON.parse(this.responseText);
 
-                        if (!entity.dul_filedata) {
+                        if (!entity.{table_filedata}) {
                             addMessage("No file found for this record");
                             return;
                         }
 
-                        currentFileName = entity.dul_name || "document";
+                        currentFileName = entity.{table_name} || "document";
                         var fileType = "pdf";
 
                         if (currentFileName && currentFileName.includes('.')) {
                             fileType = currentFileName.split('.').pop().toLowerCase();
                         }
 
-                        currentFileUrl = window.location.origin + "/api/data/v9.0/dul_demotables(" + recordId + ")/dul_filedata/$value";
+                        currentFileUrl = window.location.origin + "/api/data/v9.0/{table_set_name}(" + recordId + ")/{table_filedata}/$value";
 
                         if (fileType === "pdf") {
                             displayPDF(currentFileUrl, currentFileName);
